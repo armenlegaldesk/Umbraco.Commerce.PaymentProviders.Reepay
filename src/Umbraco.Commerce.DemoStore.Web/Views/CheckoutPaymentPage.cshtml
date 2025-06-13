@@ -10,8 +10,8 @@
     var store = Model.GetStore();
     var order = await Model.GetCurrentOrderAsync();
     var paymentMethods = await UmbracoCommerceApi.GetPaymentMethodsAsync(store!.Id).ToListAsync();
-    var zeroValuePaymentMethod = paymentMethods.FirstOrDefault(x => x.Alias == "zeroValue");
-    var nonZeroValuePaymentMethods = paymentMethods.Where(x => x.Alias != "zeroValue").ToList();
+    var zeroValuePaymentMethod = paymentMethods.FirstOrDefault(x => x.Alias == "reepay");
+    var nonZeroValuePaymentMethods = paymentMethods.Where(x => x.Alias == "reepay").ToList();
     var nonZeroValuePaymentMethodFees = await Task.WhenAll(nonZeroValuePaymentMethods.Select(x => x.TryCalculateFeeAsync()));
     
     var nextStep = Model.GetNextStep();
