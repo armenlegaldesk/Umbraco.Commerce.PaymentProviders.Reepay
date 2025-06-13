@@ -5,3 +5,7 @@
 /.vs
 /src/Umbraco.Commerce.PaymentProviders.Reepay/obj
 /src/Umbraco.Commerce.PaymentProviders.Reepay/bin
+/src/Umbraco.Commerce.DemoStore/bin/Debug/net9.0
+/src/Umbraco.Commerce.DemoStore/obj
+/src/Umbraco.Commerce.DemoStore.Web/bin/Debug/net9.0
+/src/Umbraco.Commerce.DemoStore.Web/obj
