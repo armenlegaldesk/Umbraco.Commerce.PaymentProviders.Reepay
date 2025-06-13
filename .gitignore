@@ -1,0 +1,7 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs
+/src/Umbraco.Commerce.PaymentProviders.Reepay/obj
+/src/Umbraco.Commerce.PaymentProviders.Reepay/bin
