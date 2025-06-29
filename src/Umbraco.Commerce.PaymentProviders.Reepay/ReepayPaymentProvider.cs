@@ -1,6 +1,5 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Umbraco.Commerce.Common.Logging;
@@ -29,11 +28,15 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay
         public virtual bool FinalizeAtContinueUrl => false;
 
         protected readonly ILogger<ReepayCheckoutPaymentProvider> _logger;
+        protected readonly ILogger<ReepayClient> _reepayClientLogger;
 
-        public ReepayCheckoutPaymentProvider(UmbracoCommerceContext umbracoCommerce, ILogger<ReepayCheckoutPaymentProvider> logger)
+        public ReepayCheckoutPaymentProvider(UmbracoCommerceContext umbracoCommerce,
+            ILogger<ReepayCheckoutPaymentProvider> logger,
+            ILogger<ReepayClient> reepayClientLogger)
             : base(umbracoCommerce, logger)
         {
             _logger = logger;
+            _reepayClientLogger = reepayClientLogger;
         }
 
         /// <summary>
@@ -45,12 +48,6 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay
         /// <exception cref="NotImplementedException"></exception>
         public override async Task<PaymentFormResult> GenerateFormAsync(PaymentProviderContext<ReepayCheckoutSettings> ctx, CancellationToken cancellationToken = default)
         {
-            Debug.WriteLine($"{nameof(GenerateFormAsync)} hits. " +
-                $"ContinueUrl: {ctx.Urls.ContinueUrl}" +
-                $"CancelUrl: {ctx.Urls.CancelUrl}" +
-                $"ErrorUrl: {ctx.Urls.ErrorUrl}"
-                );
-
             var currency = await Context.Services.CurrencyService.GetCurrencyAsync(ctx.Order.CurrencyId);
 
             var currencyCode = currency.Code.ToUpperInvariant();
@@ -98,7 +95,7 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay
                         Key = ctx.Order.GenerateOrderReference(),
                         Handle = ctx.Order.OrderNumber,
                         Amount = (int)orderAmount,
-                        Currency = currencyCode,
+                        Currency = "DKK", //currencyCode,
                         Customer = new ReepayCustomer
                         {
                             Email = ctx.Order.CustomerInfo.Email,
@@ -117,7 +114,7 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay
                                 ? ctx.Order.Properties[ctx.Settings.BillingAddressCityPropertyAlias] : null,
                             Phone = !string.IsNullOrWhiteSpace(ctx.Settings.BillingPhonePropertyAlias)
                                 ? ctx.Order.Properties[ctx.Settings.BillingPhonePropertyAlias] : null,
-                            Country = billingCountry?.Code,
+                            Country = "DK", //billingCountry?.Code,
                             GenerateHandle = string.IsNullOrEmpty(customerHandle)
                         },
                         BillingAddress = new ReepayAddress
@@ -136,10 +133,12 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay
                                 ? ctx.Order.Properties[ctx.Settings.BillingAddressCityPropertyAlias] : null,
                             Phone = !string.IsNullOrWhiteSpace(ctx.Settings.BillingPhonePropertyAlias)
                                 ? ctx.Order.Properties[ctx.Settings.BillingPhonePropertyAlias] : null,
-                            Country = billingCountry?.Code
+                            Country = "DK" //billingCountry?.Code
                         },
-                        MetaData = metaData
+                        MetaData = metaData,
+                        Source = "auto"
                     },
+                    Source = "auto",
                     Settle = ctx.Settings.Capture,
                     AcceptUrl = ctx.Urls.ContinueUrl,
                     CancelUrl = ctx.Urls.CancelUrl
@@ -157,7 +156,7 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay
                 }
 
                 var clientConfig = GetReepayClientConfig(ctx.Settings);
-                var client = new ReepayClient(clientConfig);
+                var client = new ReepayClient(clientConfig, _reepayClientLogger);
 
                 // Create checkout session
                 var checkoutSession = await client.CreateChargeSessionAsync(checkoutSessionRequest);

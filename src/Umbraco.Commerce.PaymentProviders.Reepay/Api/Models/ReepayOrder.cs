@@ -27,6 +27,9 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay.Api.Models
 
         [JsonProperty("metadata")]
         public Dictionary<string, string> MetaData { get; set; }
+
+        [JsonProperty("source")]
+        public string Source { get; set; } = "auto";
     }
 
 }

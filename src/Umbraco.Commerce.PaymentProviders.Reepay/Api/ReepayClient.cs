@@ -1,140 +1,213 @@
-﻿using Flurl.Http;
+﻿using Newtonsoft.Json;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using Umbraco.Commerce.Common.Logging;
+using Umbraco.Commerce.PaymentProviders.Reepay.Api.Exceptions;
 using Umbraco.Commerce.PaymentProviders.Reepay.Api.Models;
 
 namespace Umbraco.Commerce.PaymentProviders.Reepay.Api
 {
     public class ReepayClient
     {
-        private const string ApiSessionUrl = "https://checkout-api.reepay.com/v1/session/";
+        private const string SessionApiUrl = "https://checkout-api.reepay.com/v1/session/";
         private const string BaseApiUrl = "https://api.reepay.com/v1/";
+        private const string ChargeUrl = SessionApiUrl + "charge";
+        private const string RecurringUrl = SessionApiUrl + "recurring";
 
-        private readonly ReepayClientConfig _config;
-        public ReepayClient(ReepayClientConfig config)
+        private readonly HttpClient _client;
+        private readonly JsonSerializerSettings _jsonSerializerSettings;
+        private readonly ILogger<ReepayClient> _logger;
+
+        public ReepayClient(ReepayClientConfig config, ILogger<ReepayClient> logger)
         {
-            _config = config;
+            _logger = logger;
+
+            _client = new HttpClient();
+            _client.Timeout = new TimeSpan(0, 5, 0);
+            _client.DefaultRequestHeaders.Accept.Clear();
+            _client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            _jsonSerializerSettings = new JsonSerializerSettings
+            {
+                DefaultValueHandling = DefaultValueHandling.Ignore,
+                NullValueHandling = NullValueHandling.Ignore
+            };
+
+            var credentialBase64 = Convert.ToBase64String(System.Text.Encoding.GetEncoding("UTF-8").GetBytes(config.PrivateKey + ":"));
+            _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentialBase64);
         }
 
 
         public async Task<ReepaySessionResponse> CreateChargeSessionAsync(ReepayChargeSessionRequest data, CancellationToken cancellationToken = default)
         {
-            return await $"{ApiSessionUrl}v1/session/charge"
-                .WithSettings(x => x.JsonSerializer = new CustomFlurlJsonSerializer(new JsonSerializerOptions
-                {
-                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-                    PreferredObjectCreationHandling = JsonObjectCreationHandling.Replace,
-                }))
-                .WithHeader("Cache-Control", "no-cache")
-                .WithHeader("Content-Type", "application/json")
-                .WithHeader("Authorization", _config.PrivateKey)
-                .PostAsync(JsonContent.Create(data), cancellationToken: cancellationToken)
-                .ReceiveJson<ReepaySessionResponse>().ConfigureAwait(false);
+            HttpContent body = new StringContent(JsonConvert.SerializeObject(data));
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(ChargeUrl, body, cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>(cancellationToken).ConfigureAwait(false);
+                _logger.Error($"Unable to create session, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {ChargeUrl}, input data: {JsonConvert.SerializeObject(data)}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepaySessionResponse>(cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<ReepaySessionResponse> CreateRecurringSessionAsync(
           ReepayChargeSessionRequest data, CancellationToken cancellationToken = default)
         {
-            return await $"{ApiSessionUrl}/v1/session/recurring"
-                    .WithSettings(x => x.JsonSerializer = new CustomFlurlJsonSerializer(new JsonSerializerOptions
-                    {
-                        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-                        PreferredObjectCreationHandling = JsonObjectCreationHandling.Replace,
-                    }))
-                    .WithHeader("Cache-Control", "no-cache")
-                    .WithHeader("Content-Type", "application/json")
-                    .WithHeader("Authorization", _config.PrivateKey)
-                    .PostAsync(JsonContent.Create(data), cancellationToken: cancellationToken)
-                    .ReceiveJson<ReepaySessionResponse>().ConfigureAwait(false);
+            HttpContent body = new StringContent(JsonConvert.SerializeObject(data));
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(RecurringUrl, body, cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>(cancellationToken).ConfigureAwait(false);
+                _logger.Error($"Unable to recurring create session, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {RecurringUrl}, input data: {JsonConvert.SerializeObject(data)}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepaySessionResponse>(cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<ReepayCharge> GetChargeAsync(string handle, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync("/v1/charge/" + handle, async (req, ct) => await req
-                    .GetAsync(cancellationToken: ct)
-                    .ReceiveJson<ReepayCharge>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+            var url = $"{ChargeUrl}/{handle}";
+            HttpResponseMessage response = await _client.GetAsync(url).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>().ConfigureAwait(false);
+                _logger.Error($"Unable to get charge object, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepayCharge>().ConfigureAwait(false);
         }
 
         public async Task<ReepayCharge> CancelChargeAsync(string handle, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync($"/v1/charge/{handle}/cancel", async (req, ct) => await req
-                    .PostJsonAsync(null, cancellationToken: ct)
-                    .ReceiveJson<ReepayCharge>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+            var url = $"{ChargeUrl}/{handle}/cancel";
+            HttpContent body = new StringContent("");
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(url, body).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>().ConfigureAwait(false);
+                _logger.Error($"Unable to cancel charge, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepayCharge>().ConfigureAwait(false);
         }
 
         public async Task<ReepayCharge> SettleChargeAsync(string handle, ReepaySettleChargeRequest data, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync($"/v1/charge/{handle}/settle", async (req, ct) => await req
-                    .PostJsonAsync(data, cancellationToken: ct)
-                    .ReceiveJson<ReepayCharge>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+            var url = $"{ChargeUrl}/{handle}/settle";
+            var stringData = JsonConvert.SerializeObject(data, _jsonSerializerSettings);
+            HttpContent body = new StringContent(stringData);
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(url, body).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>().ConfigureAwait(false);
+                _logger.Error($"Unable to settle charge, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}, input data: {stringData}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepayCharge>().ConfigureAwait(false);
+
         }
 
         public async Task<ReepayRefund> RefundChargeAsync(CreateRefundRequest data, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync("/v1/refund", async (req, ct) => await req
-                    .PostJsonAsync(data, cancellationToken: ct)
-                    .ReceiveJson<ReepayRefund>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+            var url = $"{BaseApiUrl}refund";
+            var stringData = JsonConvert.SerializeObject(data, _jsonSerializerSettings);
+            HttpContent body = new StringContent(stringData);
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(url, body).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>().ConfigureAwait(false);
+                _logger.Error($"Unable to create refund, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}, input data: {stringData}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepayRefund>().ConfigureAwait(false);
         }
 
         public async Task<ReepaySubscription> CreateSubscriptionAsync(object data, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync("/v1/subscription", async (req, ct) => await req
-                    .PostJsonAsync(data, cancellationToken: ct)
-                    .ReceiveJson<ReepaySubscription>().ConfigureAwait(false),
-                     cancellationToken).ConfigureAwait(false);
+            var url = $"{BaseApiUrl}subscription";
+            var stringData = JsonConvert.SerializeObject(data, _jsonSerializerSettings);
+            HttpContent body = new StringContent(stringData);
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(url, body).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>().ConfigureAwait(false);
+                _logger.Error($"Unable to create refund, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}, input data: {stringData}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepaySubscription>().ConfigureAwait(false);
         }
 
         public async Task<ReepaySubscription> GetSubscriptionAsync(string handle, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync("/v1/subscription/" + handle, async (req, ct) => await req
-                    .GetAsync(cancellationToken: ct)
-                    .ReceiveJson<ReepaySubscription>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+            var url = $"{BaseApiUrl}subscription/{handle}";
+            HttpResponseMessage response = await _client.GetAsync(url).ConfigureAwait(false);
 
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>().ConfigureAwait(false);
+                _logger.Error($"Unable to get subscription, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}, input data: {handle}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepaySubscription>().ConfigureAwait(false);
         }
 
-        public async Task<ReepaySubscription> CancelSubscriptionAsync(string handle, object data, CancellationToken cancellationToken = default)
+        public async Task<ReepaySubscription> CancelSubscriptionAsync(string handle, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync($"/v1/subscription/{handle}/cancel", async (req, ct) => await req
-                    .PostJsonAsync(data, cancellationToken: ct)
-                    .ReceiveJson<ReepaySubscription>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
+            var url = $"{BaseApiUrl}subscription/{handle}/cancel";
+
+            var stringData = JsonConvert.SerializeObject(new { }, _jsonSerializerSettings);
+            HttpContent body = new StringContent(stringData);
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(url, body, cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>(cancellationToken).ConfigureAwait(false);
+                _logger.Error($"Unable to cancel subscription, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}, handle: {handle}");
+                throw new ReepayException(resErr);
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReepaySubscription>(cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<ReepaySubscription> UncancelSubscription(string handle, CancellationToken cancellationToken = default)
         {
-            return await RequestAsync($"/v1/subscription/{handle}/uncancel", async (req, ct) => await req
-                    .PostJsonAsync(null, cancellationToken: ct)
-                    .ReceiveJson<ReepaySubscription>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
-        }
+            var url = $"{BaseApiUrl}subscription/{handle}/uncancel";
 
-        public async Task<Dictionary<string, object>> GetInvoiceMetaData(string handle, CancellationToken cancellationToken = default)
-        {
-            return await RequestAsync($"/v1/invoice/{handle}/metadata", async (req, ct) => await req
-                    .GetAsync(cancellationToken: ct)
-                    .ReceiveJson<Dictionary<string, object>>().ConfigureAwait(false),
-                    cancellationToken).ConfigureAwait(false);
-        }
+            var stringData = JsonConvert.SerializeObject(new { }, _jsonSerializerSettings);
+            HttpContent body = new StringContent(stringData);
+            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            HttpResponseMessage response = await _client.PostAsync(url, body, cancellationToken).ConfigureAwait(false);
 
-        private async Task<TResult> RequestAsync<TResult>(string url, Func<IFlurlRequest, CancellationToken, Task<TResult>> func, CancellationToken cancellationToken = default)
-        {
-            FlurlRequest req = new FlurlRequest(BaseApiUrl + url)
-                .WithSettings(x => x.JsonSerializer = new CustomFlurlJsonSerializer(new JsonSerializerOptions
-                {
-                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-                    PreferredObjectCreationHandling = JsonObjectCreationHandling.Replace,
-                }))
-                .WithHeader("Cache-Control", "no-cache")
-                .WithHeader("Content-Type", "application/json")
-                .WithHeader("Authorization", _config.PrivateKey);
+            if (!response.IsSuccessStatusCode)
+            {
+                var resErr = await response.Content.ReadFromJsonAsync<ErrorResponse>(cancellationToken).ConfigureAwait(false);
+                _logger.Error($"Unable to uncancel subscription, error: {resErr.Code} {resErr.Message} {resErr.Error} {resErr.Transaction_error} {resErr.Http_status} {resErr.Http_reason} {resErr.Path} {resErr.Request_id} {resErr.TimeStamp}, url: {url}, handle: {handle}");
+                throw new ReepayException(resErr);
+            }
 
-            return await func.Invoke(req, cancellationToken).ConfigureAwait(false);
+            return await response.Content.ReadFromJsonAsync<ReepaySubscription>(cancellationToken).ConfigureAwait(false);
         }
     }
 }

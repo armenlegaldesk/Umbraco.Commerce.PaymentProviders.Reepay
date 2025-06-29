@@ -12,5 +12,9 @@ namespace Umbraco.Commerce.PaymentProviders.Reepay.Api.Models
 
         [JsonProperty("recurring")]
         public bool Recurring { get; set; }
+
+        [JsonProperty("source")]
+        public string Source { get; set; } = "auto";
+
     }
 }
